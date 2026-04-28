@@ -39,6 +39,24 @@ except ImportError:
     raise ImportError("Run: pip install tritonclient[http]")
 
 
+def _make_ssl_context():
+    """Build an SSLContext that trusts certifi's CA bundle.
+
+    geventhttpclient (used by tritonclient) calls ssl.wrap_socket() directly
+    with no ca_certs argument, bypassing the OS trust store on minimal Linux
+    images. Passing an explicit context factory fixes SSL verification on GCE
+    VMs without disabling certificate checking entirely.
+    """
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(cafile=certifi.where())
+    except ImportError:
+        pass  # certifi not installed — fall back to whatever the default context loaded
+    return ctx
+
+
 # ---------------------------------------------------------------------------
 # Constants — must match export_model.py and config.pbtxt exactly
 # ---------------------------------------------------------------------------
@@ -106,7 +124,10 @@ def run_client(
     url = endpoint.replace("https://", "").replace("http://", "")
 
     # Each thread gets its own client connection
-    client = httpclient.InferenceServerClient(url=url, ssl=use_ssl)
+    client = httpclient.InferenceServerClient(
+        url=url, ssl=use_ssl,
+        ssl_context_factory=_make_ssl_context if use_ssl else None,
+    )
 
     # Pre-build input tensor and wrap it once (reuse across requests)
     input_data = build_input_tensor()
@@ -262,7 +283,10 @@ def run_benchmark(
 
     # Verify server is reachable before spawning threads
     url = endpoint.replace("https://", "").replace("http://", "")
-    probe = httpclient.InferenceServerClient(url=url, ssl=use_ssl)
+    probe = httpclient.InferenceServerClient(
+        url=url, ssl=use_ssl,
+        ssl_context_factory=_make_ssl_context if use_ssl else None,
+    )
     if not probe.is_server_ready():
         raise RuntimeError(f"Server not ready at {endpoint}. Check deployment.")
     if not probe.is_model_ready(MODEL_NAME):
