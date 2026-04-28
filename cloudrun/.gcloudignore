@@ -1,0 +1,28 @@
+# .gcloudignore — controls what gets uploaded to Cloud Build
+# The presence of this file overrides .gitignore for gcloud uploads.
+# We explicitly allow *.onnx here because the model must be
+# included in the build context for the Dockerfile COPY step.
+
+# Git internals
+.git/
+.gitignore
+.gcloudignore
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS artifacts
+.DS_Store
+
+# Logs
+*.log
+
+# Documentation (not needed in the build context)
+CLAUDE.md
+
+# Notably NOT excluded: model_repository/ and *.onnx
+# model.onnx must be present for: COPY model_repository /models

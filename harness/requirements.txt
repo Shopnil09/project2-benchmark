@@ -1,0 +1,11 @@
+# harness/requirements.txt
+# Install with: pip install -r harness/requirements.txt
+
+# Triton HTTP client — core dependency for sending inference requests
+tritonclient[http]==2.43.0
+
+# Numerical operations — tensor construction, percentile calculations
+numpy>=1.24.0
+
+# Image preprocessing (used in test_inference.py, not harness.py directly)
+Pillow>=10.0.0
