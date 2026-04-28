@@ -1,0 +1,10 @@
+# Google's HTTP server wrapper for Cloud Functions 2nd gen.
+# Provides the Flask request object the entry point receives.
+functions-framework==3.8.1
+
+# ONNX Runtime, CPU-only build. Loads resnet50.onnx and runs inference.
+# Pin to match the structural validation done by model/export_model.py.
+onnxruntime==1.25.1
+
+# Tensor construction, shape ops. Matches harness/requirements.txt.
+numpy>=1.24.0

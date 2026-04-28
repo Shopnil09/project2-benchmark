@@ -1,0 +1,30 @@
+# .gcloudignore — controls what gets uploaded to Cloud Build during deploy.
+# Presence of this file overrides the repo .gitignore for gcloud uploads,
+# which is critical: the repo .gitignore excludes *.onnx, but the function
+# REQUIRES resnet50.onnx in the source archive at startup.
+
+# Git internals
+.git/
+.gitignore
+.gcloudignore
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS artifacts
+.DS_Store
+
+# Logs
+*.log
+
+# Local-only files (not needed in production)
+deploy.sh
+test_inference.py
+CLAUDE.md
+
+# Notably NOT excluded: resnet50.onnx
+# Loaded at module import in main.py — function fails to start without it.
