@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DNN Inference Benchmarking — GCP</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-annotation/3.0.1/chartjs-plugin-annotation.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0f172a;
+  color: #f1f5f9;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  min-height: 100vh;
+}
+
+header {
+  text-align: center;
+  padding: 2.2rem 1rem 1.4rem;
+  border-bottom: 1px solid #1e293b;
+}
+h1 {
+  font-size: 1.8rem;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: #f8fafc;
+}
+.subtitle {
+  color: #64748b;
+  margin-top: 0.4rem;
+  font-size: 0.92rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+/* ── Tabs ── */
+nav {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+  padding: 0 2rem;
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+}
+.tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #64748b;
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 0.9rem 1.6rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.tab-btn:hover { color: #cbd5e1; }
+.tab-btn.active { color: #f8fafc; border-bottom-color: #3b82f6; }
+
+/* ── Panels ── */
+.panel { display: none; padding: 2rem; max-width: 1080px; margin: 0 auto; }
+.panel.active { display: block; }
+
+/* ── Cards ── */
+.chart-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 1.6rem 1.8rem 1.4rem;
+}
+.chart-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin-bottom: 0.25rem;
+}
+.chart-sub {
+  color: #64748b;
+  font-size: 0.8rem;
+  margin-bottom: 1.2rem;
+}
+.chart-wrap {
+  position: relative;
+  height: 420px;
+}
+
+/* ── Toggle buttons (latency metric) ── */
+.toggle-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+.tog {
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tog:hover { border-color: #475569; color: #cbd5e1; }
+.tog.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+
+/* ── TEE callout banner ── */
+.callout {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 8px;
+  padding: 0.8rem 1.1rem;
+  margin-bottom: 1.4rem;
+  font-size: 0.9rem;
+  color: #4ade80;
+  font-weight: 500;
+}
+.callout .icon { font-size: 1.1rem; flex-shrink: 0; }
+
+/* ── Config toggle color overrides (Feature 1) ── */
+#ctog-gpu.active  { background: #3b82f6; border-color: #3b82f6; }
+#ctog-cpu.active  { background: #f97316; border-color: #f97316; }
+#ctog-conf.active { background: #22c55e; border-color: #22c55e; }
+#ctog-cr.active   { background: #a855f7; border-color: #a855f7; }
+#ctog-cf.active   { background: #ef4444; border-color: #ef4444; }
+
+/* ── Summary scorecard tab (Feature 2) ── */
+.scorecard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+@media (max-width: 700px) { .scorecard-grid { grid-template-columns: 1fr 1fr; } }
+.score-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-left: 4px solid var(--card-clr, #3b82f6);
+  border-radius: 10px;
+  padding: 1.1rem 1.3rem;
+}
+.sc-cat {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #64748b;
+  margin-bottom: 0.35rem;
+}
+.sc-winner {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--card-clr, #f8fafc);
+  margin-bottom: 0.25rem;
+}
+.sc-stat { font-size: 0.85rem; color: #94a3b8; }
+.ref-table { width: 100%; border-collapse: collapse; }
+.ref-table th {
+  text-align: left;
+  padding: 0.6rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #64748b;
+  border-bottom: 1px solid #334155;
+}
+.ref-table td {
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid #1e293b;
+  color: #e2e8f0;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+.ref-table tr:hover td { background: rgba(255,255,255,0.03); }
+.ref-table tr td:first-child { border-left: 3px solid var(--row-clr, #64748b); }
+.ref-dot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>DNN Inference Benchmarking — GCP</h1>
+  <p class="subtitle">ResNet-50 &middot; Triton Inference Server &middot; us-central1</p>
+</header>
+
+<nav>
+  <button class="tab-btn active" onclick="showTab('latency',this)">Latency</button>
+  <button class="tab-btn" onclick="showTab('throughput',this)">Throughput</button>
+  <button class="tab-btn" onclick="showTab('cost',this)">Cost-Performance</button>
+  <button class="tab-btn" onclick="showTab('tee',this)">TEE Overhead</button>
+  <button class="tab-btn" onclick="showTab('summary',this)">Summary</button>
+</nav>
+
+<!-- ── Panel 1: Latency ── -->
+<div id="panel-latency" class="panel active">
+  <div class="chart-card">
+    <div class="chart-title">Latency vs. Concurrency</div>
+    <div class="chart-sub">Log scale &middot; All five configs &middot; Toggle percentile and configs below</div>
+    <div class="toggle-row" style="margin-bottom:0.5rem;">
+      <span style="font-size:0.75rem;color:#64748b;align-self:center;margin-right:0.4rem;">configs:</span>
+      <button class="tog active" id="ctog-gpu"  onclick="toggleConfig(0)">GPU (L4)</button>
+      <button class="tog active" id="ctog-cpu"  onclick="toggleConfig(1)">CPU VM</button>
+      <button class="tog active" id="ctog-conf" onclick="toggleConfig(2)">Confidential VM</button>
+      <button class="tog active" id="ctog-cr"   onclick="toggleConfig(3)">Cloud Run</button>
+      <button class="tog active" id="ctog-cf"   onclick="toggleConfig(4)">Cloud Function</button>
+    </div>
+    <div class="toggle-row">
+      <button class="tog active" id="tog-p50" onclick="setMetric('p50')">p50</button>
+      <button class="tog" id="tog-p95" onclick="setMetric('p95')">p95</button>
+      <button class="tog" id="tog-p99" onclick="setMetric('p99')">p99</button>
+      <button class="tog" id="btn-play" onclick="playAnim()" style="margin-left:auto;">&#9654; Play</button>
+    </div>
+    <div class="chart-wrap"><canvas id="c-latency"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Panel 2: Throughput ── -->
+<div id="panel-throughput" class="panel">
+  <div class="chart-card">
+    <div class="chart-title">Throughput vs. Concurrency</div>
+    <div class="chart-sub">Successful requests per second &middot; Wall-clock measurement</div>
+    <div class="toggle-row">
+      <button class="tog active" id="tog-all" onclick="setTputView('all')">All configs</button>
+      <button class="tog" id="tog-cpu" onclick="setTputView('cpu')">CPU configs only</button>
+    </div>
+    <div class="chart-wrap"><canvas id="c-throughput"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Panel 3: Cost-Performance ── -->
+<div id="panel-cost" class="panel">
+  <div class="chart-card">
+    <div class="chart-title">Cost-Performance Frontier</div>
+    <div class="chart-sub">
+      Cost per 1,000 inferences vs. p99 latency &middot; Both axes log scale &middot;
+      Operating point: highest error-free concurrency per config &middot;
+      Diamond = managed service (off frontier)
+    </div>
+    <div class="chart-wrap"><canvas id="c-cost"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Panel 4: TEE ── -->
+<div id="panel-tee" class="panel">
+  <div class="callout">
+    <span class="icon">🔒</span>
+    <span>AMD SEV adds ~3 ms p50 overhead at C=10 (0.7%) and costs 6% more per hour — effectively free in performance terms.</span>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">TEE Overhead: Standard CPU VM vs. Confidential VM</div>
+    <div class="chart-sub">n2d-standard-4 &middot; Left axis: latency (ms) &middot; Right axis: throughput (req/s)</div>
+    <div class="chart-wrap"><canvas id="c-tee"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Panel 5: Summary Scorecard ── -->
+<div id="panel-summary" class="panel">
+  <h2 style="font-size:1.4rem;font-weight:700;margin-bottom:1.5rem;color:#f8fafc;">Winner Per Category</h2>
+  <div class="scorecard-grid">
+    <div class="score-card" style="--card-clr:#3b82f6">
+      <div class="sc-cat">Fastest</div>
+      <div class="sc-winner">GPU (L4)</div>
+      <div class="sc-stat">4.7 ms p50 @ C=1</div>
+    </div>
+    <div class="score-card" style="--card-clr:#3b82f6">
+      <div class="sc-cat">Highest Throughput</div>
+      <div class="sc-winner">GPU (L4)</div>
+      <div class="sc-stat">205 req/s @ C=100</div>
+    </div>
+    <div class="score-card" style="--card-clr:#22c55e">
+      <div class="sc-cat">Cheapest</div>
+      <div class="sc-winner">Confidential VM</div>
+      <div class="sc-stat">$0.0025 / 1k inferences</div>
+    </div>
+    <div class="score-card" style="--card-clr:#22c55e">
+      <div class="sc-cat">TEE Security</div>
+      <div class="sc-winner">Confidential VM</div>
+      <div class="sc-stat">AMD SEV &middot; +0.7% latency overhead</div>
+    </div>
+    <div class="score-card" style="--card-clr:#ef4444">
+      <div class="sc-cat">Best FaaS</div>
+      <div class="sc-winner">Cloud Function</div>
+      <div class="sc-stat">No idle cost &middot; auto-scales to zero</div>
+    </div>
+    <div class="score-card" style="--card-clr:#a855f7">
+      <div class="sc-cat">Best Managed Balance</div>
+      <div class="sc-winner">Cloud Run</div>
+      <div class="sc-stat">~$0.062/1k &middot; no VM management</div>
+    </div>
+  </div>
+
+  <h2 style="font-size:1.2rem;font-weight:700;margin-bottom:1rem;color:#f8fafc;">Quick Reference</h2>
+  <div style="overflow-x:auto;">
+    <table class="ref-table">
+      <thead>
+        <tr>
+          <th>Config</th>
+          <th>p50 @ C=1</th>
+          <th>p50 @ C=10</th>
+          <th>Throughput @ C=100</th>
+          <th>Cost / 1k req</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="--row-clr:#3b82f6">
+          <td><span class="ref-dot" style="background:#3b82f6"></span>GPU (L4)</td>
+          <td>4.7 ms</td><td>38.4 ms</td><td>205.0 req/s</td><td>$0.0026</td>
+        </tr>
+        <tr style="--row-clr:#f97316">
+          <td><span class="ref-dot" style="background:#f97316"></span>CPU VM</td>
+          <td>55.4 ms</td><td>513 ms</td><td>17.8 req/s</td><td>$0.0026</td>
+        </tr>
+        <tr style="--row-clr:#22c55e">
+          <td><span class="ref-dot" style="background:#22c55e"></span>Confidential VM</td>
+          <td>55.6 ms</td><td>516 ms</td><td>19.7 req/s</td><td>$0.0025</td>
+        </tr>
+        <tr style="--row-clr:#a855f7">
+          <td><span class="ref-dot" style="background:#a855f7"></span>Cloud Run</td>
+          <td>74.3 ms</td><td>532 ms</td><td>16.2 req/s</td><td>$0.0616</td>
+        </tr>
+        <tr style="--row-clr:#ef4444">
+          <td><span class="ref-dot" style="background:#ef4444"></span>Cloud Function</td>
+          <td>205 ms</td><td>480 ms</td><td>15.2 req/s</td><td>$0.0560</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Colors (consistent across all charts)
+// ─────────────────────────────────────────────────────────────────────────────
+const CLR = {
+  gpu:  '#3b82f6',   // blue
+  cpu:  '#f97316',   // orange
+  conf: '#22c55e',   // green
+  cr:   '#a855f7',   // purple
+  cf:   '#ef4444',   // red
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data
+// ─────────────────────────────────────────────────────────────────────────────
+const CLABELS = [1, 10, 50, 100];
+
+const LAT = {
+  p50: {
+    gpu:  [4.7,   38.4,  188,   376  ],
+    cpu:  [55.4,  513,   2560,  5136 ],
+    conf: [55.6,  516,   2557,  4602 ],
+    cr:   [74.3,  532,   2539,  3341 ],
+    cf:   [205,   480,   2871,  4541 ],
+  },
+  p95: {
+    gpu:  [4.9,   39.0,  191,   381  ],
+    cpu:  [90.2,  531,   2624,  5244 ],
+    conf: [59.7,  535,   2646,  4836 ],
+    cr:   [95.3,  602,   2915,  4586 ],
+    cf:   [288,   850,   3799,  5608 ],
+  },
+  p99: {
+    gpu:  [5.1,   39.4,  193,   384  ],
+    cpu:  [93.6,  540,   2657,  5316 ],
+    conf: [62.8,  542,   2788,  4974 ],
+    cr:   [108.7, 629,   3065,  5111 ],
+    cf:   [412,   1240,  4420,  6097 ],
+  },
+};
+
+const TPUT = {
+  gpu:  [11.9, 82.0,  177.5, 205.0],
+  cpu:  [11.3, 17.2,  17.7,  17.8 ],
+  conf: [11.9, 17.0,  17.5,  19.7 ],
+  cr:   [9.4,  16.5,  17.7,  16.2 ],
+  cf:   [3.8,  16.1,  15.5,  15.2 ],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart defaults
+// ─────────────────────────────────────────────────────────────────────────────
+const GRID  = 'rgba(255,255,255,0.05)';
+const MUTED = '#64748b';
+
+Chart.defaults.color     = '#94a3b8';
+Chart.defaults.font.size = 12;
+Chart.defaults.font.family = 'system-ui, -apple-system, sans-serif';
+
+function lineDS(label, color, data, extra) {
+  return {
+    label,
+    data,
+    borderColor: color,
+    backgroundColor: color + '18',
+    tension: 0.25,
+    pointRadius: 5,
+    pointHoverRadius: 8,
+    borderWidth: 2,
+    ...extra,
+  };
+}
+const THICK = { borderWidth: 3.5, pointRadius: 7, pointHoverRadius: 10 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab switching
+// ─────────────────────────────────────────────────────────────────────────────
+const CHARTS = {};
+
+// Feature 1: per-config visibility state (indices 0-4 = gpu, cpu, conf, cr, cf)
+const VISIBLE = [true, true, true, true, true];
+const CONFIG_TOG_IDS = ['ctog-gpu', 'ctog-cpu', 'ctog-conf', 'ctog-cr', 'ctog-cf'];
+
+function toggleConfig(idx) {
+  VISIBLE[idx] = !VISIBLE[idx];
+  document.getElementById(CONFIG_TOG_IDS[idx]).classList.toggle('active', VISIBLE[idx]);
+  CHARTS.latency.data.datasets[idx].hidden = !VISIBLE[idx];
+  CHARTS.latency.update();
+  CHARTS.throughput.data.datasets[idx].hidden =
+    (idx === 0) ? (!VISIBLE[0] || curTputView === 'cpu') : !VISIBLE[idx];
+  CHARTS.throughput.update();
+}
+
+function showTab(id, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('panel-' + id).classList.add('active');
+  btn.classList.add('active');
+  if (CHARTS[id]) setTimeout(() => CHARTS[id].resize(), 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart 1 — Latency
+// ─────────────────────────────────────────────────────────────────────────────
+function latencyAnnotations(metric) {
+  return {
+    crErr: {
+      type: 'label',
+      xValue: 3,
+      yValue: LAT[metric].cr[3],
+      content: ['⚠ 68% errors'],
+      color: CLR.cr,
+      font: { size: 10, weight: 'bold' },
+      backgroundColor: 'rgba(15,23,42,0.9)',
+      padding: { x: 5, y: 3 },
+      borderRadius: 4,
+      yAdjust: -22,
+    },
+    cfErr: {
+      type: 'label',
+      xValue: 3,
+      yValue: LAT[metric].cf[3],
+      content: ['⚠ 46% errors'],
+      color: CLR.cf,
+      font: { size: 10, weight: 'bold' },
+      backgroundColor: 'rgba(15,23,42,0.9)',
+      padding: { x: 5, y: 3 },
+      borderRadius: 4,
+      yAdjust: 22,
+    },
+  };
+}
+
+function makeLatDS(metric) {
+  const d = LAT[metric];
+  const defs = [
+    ['GPU (L4)',        CLR.gpu,  d.gpu, {}],
+    ['CPU VM',          CLR.cpu,  d.cpu,  THICK],
+    ['Confidential VM', CLR.conf, d.conf, THICK],
+    ['Cloud Run',       CLR.cr,   d.cr,   THICK],
+    ['Cloud Function',  CLR.cf,   d.cf,   THICK],
+  ];
+  return defs.map((args, i) => ({ ...lineDS(...args), hidden: !VISIBLE[i] }));
+}
+
+CHARTS.latency = new Chart(document.getElementById('c-latency'), {
+  type: 'line',
+  data: { labels: CLABELS, datasets: makeLatDS('p50') },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { usePointStyle: true, padding: 20, boxWidth: 10 },
+      },
+      tooltip: {
+        callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()} ms`,
+        },
+      },
+      annotation: { annotations: latencyAnnotations('p50') },
+    },
+    scales: {
+      x: {
+        title: { display: true, text: 'Concurrent clients', color: MUTED },
+        grid: { color: GRID },
+      },
+      y: {
+        type: 'logarithmic',
+        title: { display: true, text: 'Latency (ms) — log scale', color: MUTED },
+        grid: { color: GRID },
+        ticks: {
+          callback: v => {
+            const map = { 1: '1ms', 10: '10ms', 100: '100ms', 1000: '1s', 10000: '10s' };
+            return map[v] ?? '';
+          },
+        },
+      },
+    },
+  },
+});
+
+let curMetric = 'p50';
+function setMetric(m) {
+  if (animTimer !== null) stopAnim();
+  curMetric = m;
+  CHARTS.latency.data.datasets = makeLatDS(m);
+  CHARTS.latency.options.plugins.annotation.annotations = latencyAnnotations(m);
+  CHARTS.latency.update();
+  ['p50', 'p95', 'p99'].forEach(k => document.getElementById('tog-' + k).classList.remove('active'));
+  document.getElementById('tog-' + m).classList.add('active');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart 2 — Throughput
+// ─────────────────────────────────────────────────────────────────────────────
+CHARTS.throughput = new Chart(document.getElementById('c-throughput'), {
+  type: 'line',
+  data: {
+    labels: CLABELS,
+    datasets: [
+      lineDS('GPU (L4)',        CLR.gpu,  TPUT.gpu),
+      lineDS('CPU VM',          CLR.cpu,  TPUT.cpu,  THICK),
+      lineDS('Confidential VM', CLR.conf, TPUT.conf, THICK),
+      lineDS('Cloud Run',       CLR.cr,   TPUT.cr,   THICK),
+      lineDS('Cloud Function',  CLR.cf,   TPUT.cf,   THICK),
+    ],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { usePointStyle: true, padding: 20, boxWidth: 10 },
+      },
+      tooltip: {
+        callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} req/s`,
+        },
+      },
+      annotation: {
+        annotations: {
+          ceiling: {
+            type: 'line',
+            yMin: 17, yMax: 17,
+            borderColor: 'rgba(255,255,255,0.22)',
+            borderWidth: 1.5,
+            borderDash: [8, 5],
+            label: {
+              display: true,
+              content: 'CPU saturation ceiling  ~17 req/s',
+              position: 'start',
+              color: 'rgba(255,255,255,0.75)',
+              backgroundColor: 'transparent',
+              font: { size: 13, weight: 'bold' },
+              yAdjust: -13,
+            },
+          },
+          crWarn: {
+            type: 'label',
+            xValue: 3,
+            yValue: TPUT.cr[3],
+            content: ['⚠ 68% errors'],
+            color: CLR.cr,
+            font: { size: 10, weight: 'bold' },
+            backgroundColor: 'rgba(15,23,42,0.9)',
+            padding: { x: 5, y: 3 },
+            borderRadius: 4,
+            yAdjust: -22,
+          },
+          cfWarn: {
+            type: 'label',
+            xValue: 3,
+            yValue: TPUT.cf[3],
+            content: ['⚠ 46% errors'],
+            color: CLR.cf,
+            font: { size: 10, weight: 'bold' },
+            backgroundColor: 'rgba(15,23,42,0.9)',
+            padding: { x: 5, y: 3 },
+            borderRadius: 4,
+            yAdjust: 22,
+          },
+          errorCallout: {
+            type: 'label',
+            xValue: 1,
+            yValue: 150,
+            content: ['Cloud Run: 68% errors at C=100', 'Cloud Function: 46% errors at C=100'],
+            color: 'rgba(248,250,252,0.9)',
+            font: { size: 11.5 },
+            backgroundColor: 'rgba(15,23,42,0.88)',
+            padding: { x: 11, y: 8 },
+            borderRadius: 7,
+            borderColor: 'rgba(255,255,255,0.18)',
+            borderWidth: 1,
+            textAlign: 'left',
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        title: { display: true, text: 'Concurrent clients', color: MUTED },
+        grid: { color: GRID },
+      },
+      y: {
+        title: { display: true, text: 'Throughput (req/s)', color: MUTED },
+        grid: { color: GRID },
+        min: 0,
+      },
+    },
+  },
+});
+
+let curTputView = 'all';
+function setTputView(mode) {
+  curTputView = mode;
+  const ch  = CHARTS.throughput;
+  const ann = ch.options.plugins.annotation.annotations;
+  const isCpu = mode === 'cpu';
+
+  // GPU is dataset index 0 — hide it in cpu-only view or when toggled off
+  ch.data.datasets[0].hidden = isCpu || !VISIBLE[0];
+
+  // Y-axis: clamp 0–25 to show saturation detail; auto otherwise
+  ch.options.scales.y.max = isCpu ? 25 : undefined;
+
+  // Reposition error-rate callout so it stays in the visible y range
+  ann.errorCallout.yValue = isCpu ? 20 : 150;
+
+  ch.update();
+
+  document.getElementById('tog-all').classList.toggle('active', !isCpu);
+  document.getElementById('tog-cpu').classList.toggle('active', isCpu);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Feature 3 — Concurrency animation
+// ─────────────────────────────────────────────────────────────────────────────
+let animTimer = null, animStep = 0;
+const _CONF_KEYS = ['gpu', 'cpu', 'conf', 'cr', 'cf'];
+
+function _animApplyStep(n) {
+  const ch = CHARTS.latency;
+  ch.data.labels = CLABELS.slice(0, n);
+  ch.data.datasets.forEach((ds, i) => {
+    ds.data = LAT[curMetric][_CONF_KEYS[i]].slice(0, n);
+  });
+  const ann = ch.options.plugins.annotation.annotations;
+  ann.crErr.display = ann.cfErr.display = (n === 4);
+  ch.update({ duration: 600 });
+}
+
+function playAnim() {
+  if (animTimer !== null) { stopAnim(); return; }
+  const btn = document.getElementById('btn-play');
+  btn.textContent = '⏹ Stop';
+  btn.classList.add('active');
+  animStep = 1;
+  _animApplyStep(1);
+  animTimer = setInterval(() => {
+    animStep++;
+    if (animStep > 4) { stopAnim(); return; }
+    _animApplyStep(animStep);
+    if (animStep === 4) {
+      setTimeout(() => {
+        if (animTimer === null) {
+          document.getElementById('btn-play').textContent = '▶ Play';
+          document.getElementById('btn-play').classList.remove('active');
+          animStep = 0;
+        }
+      }, 700);
+    }
+  }, 1800);
+}
+
+function stopAnim() {
+  if (animTimer) { clearInterval(animTimer); animTimer = null; }
+  animStep = 0;
+  const ch = CHARTS.latency;
+  ch.data.labels = [...CLABELS];
+  ch.data.datasets.forEach((ds, i) => {
+    ds.data = [...LAT[curMetric][_CONF_KEYS[i]]];
+  });
+  const ann = ch.options.plugins.annotation.annotations;
+  ann.crErr.display = ann.cfErr.display = true;
+  ch.update({ duration: 300 });
+  const btn = document.getElementById('btn-play');
+  btn.textContent = '▶ Play';
+  btn.classList.remove('active');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart 3 — Cost-Performance Frontier
+// ─────────────────────────────────────────────────────────────────────────────
+function scatterDS(label, color, x, y, onFrontier) {
+  return {
+    label,
+    data: [{ x, y }],
+    backgroundColor: onFrontier ? color : 'transparent',
+    borderColor: color,
+    borderWidth: onFrontier ? 0 : 3,
+    pointRadius: 11,
+    pointHoverRadius: 14,
+    pointStyle: onFrontier ? 'circle' : 'rectRot',
+  };
+}
+
+CHARTS.cost = new Chart(document.getElementById('c-cost'), {
+  type: 'scatter',
+  data: {
+    datasets: [
+      // Frontier dashed line (drawn first / behind)
+      {
+        type: 'line',
+        label: 'Efficient Frontier',
+        data: [{ x: 193, y: 0.0026 }, { x: 5316, y: 0.0026 }],
+        borderColor: 'rgba(255,255,255,0.3)',
+        borderDash: [9, 5],
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: false,
+        tension: 0,
+        order: 10,
+        backgroundColor: 'transparent',
+      },
+      scatterDS('GPU (L4)',        CLR.gpu,  193,  0.0026, true),
+      scatterDS('CPU VM',          CLR.cpu,  5316, 0.0026, true),
+      scatterDS('Confidential VM', CLR.conf, 4974, 0.0025, true),
+      scatterDS('Cloud Run',       CLR.cr,   629,  0.0616, false),
+      scatterDS('Cloud Function',  CLR.cf,   1240, 0.0560, false),
+    ],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { usePointStyle: true, padding: 20, boxWidth: 10 },
+      },
+      tooltip: {
+        callbacks: {
+          label: ctx => {
+            if (ctx.datasetIndex === 0) return null;
+            const d = ctx.raw;
+            return ` ${ctx.dataset.label}: p99 = ${d.x} ms  ·  $${d.y.toFixed(4)} / 1k req`;
+          },
+        },
+        filter: item => item.datasetIndex !== 0,
+      },
+      annotation: {
+        annotations: {
+          frontierLabel: {
+            type: 'label',
+            xValue: 900,
+            yValue: 0.00215,
+            content: ['Efficient Frontier'],
+            color: 'rgba(255,255,255,0.38)',
+            font: { size: 11 },
+            backgroundColor: 'transparent',
+          },
+          gpuLbl: {
+            type: 'label', xValue: 193, yValue: 0.0026,
+            content: ['GPU (L4)'], color: CLR.gpu,
+            font: { size: 11, weight: '600' },
+            backgroundColor: 'rgba(15,23,42,0.85)',
+            padding: { x: 5, y: 3 }, borderRadius: 4, yAdjust: -24,
+          },
+          cpuLbl: {
+            type: 'label', xValue: 5316, yValue: 0.0026,
+            content: ['CPU VM'], color: CLR.cpu,
+            font: { size: 11, weight: '600' },
+            backgroundColor: 'rgba(15,23,42,0.85)',
+            padding: { x: 5, y: 3 }, borderRadius: 4, yAdjust: -24,
+          },
+          confLbl: {
+            type: 'label', xValue: 4974, yValue: 0.0025,
+            content: ['Confidential VM'], color: CLR.conf,
+            font: { size: 11, weight: '600' },
+            backgroundColor: 'rgba(15,23,42,0.85)',
+            padding: { x: 5, y: 3 }, borderRadius: 4, yAdjust: 26,
+          },
+          crLbl: {
+            type: 'label', xValue: 629, yValue: 0.0616,
+            content: ['Cloud Run'], color: CLR.cr,
+            font: { size: 11, weight: '600' },
+            backgroundColor: 'rgba(15,23,42,0.85)',
+            padding: { x: 5, y: 3 }, borderRadius: 4, yAdjust: -24,
+          },
+          cfLbl: {
+            type: 'label', xValue: 1240, yValue: 0.0560,
+            content: ['Cloud Function'], color: CLR.cf,
+            font: { size: 11, weight: '600' },
+            backgroundColor: 'rgba(15,23,42,0.85)',
+            padding: { x: 5, y: 3 }, borderRadius: 4, yAdjust: 26,
+          },
+          callout: {
+            type: 'label',
+            xValue: 270,
+            yValue: 0.015,
+            content: ['GPU = 12× lower latency', 'at identical cost vs CPU VM'],
+            color: 'rgba(248,250,252,0.8)',
+            font: { size: 11.5 },
+            backgroundColor: 'rgba(59,130,246,0.12)',
+            padding: { x: 10, y: 7 },
+            borderRadius: 7,
+            borderColor: 'rgba(59,130,246,0.35)',
+            borderWidth: 1,
+            textAlign: 'center',
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        type: 'logarithmic',
+        title: { display: true, text: 'p99 Latency (ms) — log scale', color: MUTED },
+        grid: { color: GRID },
+        min: 100,
+        max: 12000,
+        ticks: {
+          callback: v => {
+            const map = { 100: '100ms', 300: '300ms', 1000: '1s', 3000: '3s', 10000: '10s' };
+            return map[v] ?? '';
+          },
+        },
+      },
+      y: {
+        type: 'logarithmic',
+        title: { display: true, text: 'Cost per 1,000 inferences ($) — log scale', color: MUTED },
+        grid: { color: GRID },
+        min: 0.001,
+        max: 0.2,
+        ticks: {
+          callback: v => {
+            const map = {
+              0.001:  '$0.001',
+              0.003:  '$0.003',
+              0.01:   '$0.010',
+              0.03:   '$0.030',
+              0.1:    '$0.100',
+            };
+            return map[v] ?? '';
+          },
+        },
+      },
+    },
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart 4 — TEE Overhead
+// ─────────────────────────────────────────────────────────────────────────────
+const TEE_LABELS  = ['C=1 p50', 'C=10 p50', 'C=10 p99', 'C=50 p99', 'Throughput C=10'];
+
+// Latency datasets — left y-axis; throughput datasets — right y-axis
+// null = no bar rendered for that group
+const teeDS = [
+  { label: 'CPU VM',          data: [55.4, 512.5, 540.1, 2657, null], yAxisID: 'yL', backgroundColor: CLR.cpu  + 'cc', borderRadius: 4 },
+  { label: 'Confidential VM', data: [55.6, 515.8, 542.3, 2788, null], yAxisID: 'yL', backgroundColor: CLR.conf + 'cc', borderRadius: 4 },
+  { label: '_cpu_tput',       data: [null, null,  null,  null, 17.2],  yAxisID: 'yR', backgroundColor: CLR.cpu  + 'cc', borderRadius: 4 },
+  { label: '_conf_tput',      data: [null, null,  null,  null, 17.0],  yAxisID: 'yR', backgroundColor: CLR.conf + 'cc', borderRadius: 4 },
+];
+
+CHARTS.tee = new Chart(document.getElementById('c-tee'), {
+  type: 'bar',
+  data: { labels: TEE_LABELS, datasets: teeDS },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: {
+          usePointStyle: true,
+          padding: 20,
+          boxWidth: 10,
+          filter: item => !item.text.startsWith('_'),
+        },
+      },
+      tooltip: {
+        callbacks: {
+          label: ctx => {
+            if (ctx.raw === null) return null;
+            const isLat  = ctx.datasetIndex < 2;
+            const name   = ctx.datasetIndex % 2 === 0 ? 'CPU VM' : 'Confidential VM';
+            const unit   = isLat ? 'ms' : 'req/s';
+            return ` ${name}: ${ctx.raw.toFixed(1)} ${unit}`;
+          },
+        },
+        filter: item => item.raw !== null,
+      },
+      annotation: {
+        annotations: {
+          priceLine: {
+            type: 'label',
+            xValue: 4,  // last bar group
+            yScaleID: 'yR',
+            yValue: 22,
+            content: ['+6% cost/hr'],
+            color: 'rgba(255,255,255,0.45)',
+            font: { size: 10 },
+            backgroundColor: 'transparent',
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: { color: GRID },
+        ticks: { color: '#94a3b8' },
+      },
+      yL: {
+        type: 'linear',
+        position: 'left',
+        title: { display: true, text: 'Latency (ms)', color: MUTED },
+        grid: { color: GRID },
+        min: 0,
+      },
+      yR: {
+        type: 'linear',
+        position: 'right',
+        title: { display: true, text: 'Throughput (req/s)', color: MUTED },
+        grid: { display: false },
+        min: 0,
+        max: 25,
+      },
+    },
+  },
+});
+</script>
+</body>
+</html>
