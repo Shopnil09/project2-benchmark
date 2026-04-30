@@ -1,8 +1,6 @@
 # Project 2 — DNN Inference Benchmarking on GCP
 
-Performance benchmarking of ResNet-50 inference across four GCP deployment configurations (GPU VM, CPU VM, Cloud Run, Cloud Functions), with a confidential-computing overhead study layered on top.
-
-This repository holds the **Cloud Run slice** and the **shared benchmarking harness** that all four teammates run against their own deployments.
+Performance benchmarking of ResNet-50 inference across five GCP deployment configurations: GPU VM, CPU VM, Confidential VM, Cloud Run, and Cloud Functions. Includes a confidential-computing overhead study (AMD SEV) and an interactive results dashboard.
 
 **Team:** Aashir Khan, Ethan Chang, Yang-Jung (Eric) Chen, Shopnil Shahriar
 **Model:** ResNet-50, ONNX, FP32, batch size 1
@@ -10,166 +8,164 @@ This repository holds the **Cloud Run slice** and the **shared benchmarking harn
 **Region:** us-central1
 **Project:** `ancient-acumen-486002-j4`
 
+**Dashboard:** https://shopnil09.github.io/project2-benchmark/
+
 ---
 
 ## Repository layout
 
 ```
-Project2/
-├── model/         # ResNet-50 → ONNX export (canonical model artifact)
-├── cloudrun/      # Cloud Run deployment (Triton + ResNet-50 in a container)
-├── harness/       # Shared benchmarking harness (used by all 4 teammates)
-└── results/       # Raw per-request CSVs, organized by config
+project2-benchmark/
+├── index.html              # Interactive results dashboard (Chart.js)
+├── model/                  # ResNet-50 → ONNX export (canonical artifact)
+├── cloudrun/               # Cloud Run deployment (Triton in a container)
+├── cloudfunction/          # Cloud Functions 2nd gen deployment (onnxruntime adapter)
+├── confidential/           # CPU VM + Confidential VM deployments (AMD SEV study)
+├── harness/                # Shared benchmarking harness (used by all configs)
+├── results/
+│   ├── cloudrun/           # 20 CSVs + NOTES.md (Shopnil Shahriar)
+│   ├── cloudfunction/      # 20 CSVs + NOTES.md (Ethan Chang)
+│   └── gpu/                # 20 CSVs + notes_gpu.json (Aashir Khan)
+├── confidential/results/
+│   ├── cpu/                # 20 CSVs (Yang-Jung Chen)
+│   └── confidential/       # 20 CSVs (Yang-Jung Chen)
 ```
 
-The `resnet50.onnx` binary itself is **not committed** (gitignored). It is reproduced from [model/export_model.py](model/export_model.py) and integrity-checked against [model/resnet50.onnx.sha256](model/resnet50.onnx.sha256).
+The `resnet50.onnx` binary is **not committed** (gitignored, ~98 MB). Reproduce it from [model/export_model.py](model/export_model.py) and verify against [model/resnet50.onnx.sha256](model/resnet50.onnx.sha256).
+
+---
+
+## Benchmark status
+
+All five configurations are fully benchmarked. Each ran the complete protocol: concurrency ∈ {1, 10, 50, 100} × 5 runs × 200 requests per client (20 warmup discarded) = 20 CSVs per config.
+
+| Config | Owner | Hardware | Error-free runs | Notes |
+|---|---|---|---|---|
+| GPU VM | Aashir Khan | NVIDIA L4, g2-standard-4 | 20/20 | L4 substituted for T4 (T4 exhausted in all us-central1 zones) |
+| CPU VM | Yang-Jung Chen | n2d-standard-4 | 20/20 | Baseline for TEE overhead study |
+| Confidential VM | Yang-Jung Chen | n2d-standard-4 + AMD SEV | 20/20 | +0.7% latency vs CPU VM, +6% cost/hr |
+| Cloud Run | Shopnil Shahriar | 4 vCPU / 8 GB (managed) | 20/20 | |
+| Cloud Functions | Ethan Chang | 4 vCPU / 8 GB (managed) | 15/20 | C=100 runs exceed 5% error threshold (structural, not transient) |
+
+---
+
+## Key results
+
+| Config | p50 @ C=1 | p50 @ C=10 | Throughput @ C=100 | Cost / 1k req |
+|---|---|---|---|---|
+| GPU (L4) | 4.7 ms | 38.4 ms | 205 req/s | $0.0026 |
+| CPU VM | 55.4 ms | 513 ms | 17.8 req/s | $0.0026 |
+| Confidential VM | 55.6 ms | 516 ms | 19.7 req/s | $0.0025 |
+| Cloud Run | 74.3 ms | 532 ms | 16.2 req/s | $0.0616 |
+| Cloud Function | 205 ms | 480 ms | 15.2 req/s | $0.0560 |
 
 ---
 
 ## [model/](model/) — Canonical model artifact
 
-Produces a single self-contained ONNX file used by every deployment configuration in the study.
-
 | File | Purpose |
 |---|---|
-| [model/export_model.py](model/export_model.py) | Loads `ResNet50_Weights.IMAGENET1K_V2` from torchvision, exports to ONNX (opset 18, single-file via `dynamo=False`), structurally validates with `onnx.checker`, numerically validates against PyTorch outputs, writes SHA-256. |
-| [model/resnet50.onnx.sha256](model/resnet50.onnx.sha256) | Committed integrity hash. Lets any teammate verify they have the exact same `.onnx` everyone else built against. |
-
-**Run it:**
+| [model/export_model.py](model/export_model.py) | Exports `ResNet50_Weights.IMAGENET1K_V2` to ONNX (opset 18), validates structurally and numerically, writes SHA-256. |
+| [model/resnet50.onnx.sha256](model/resnet50.onnx.sha256) | Committed integrity hash — all teammates verified the same artifact. |
 
 ```bash
 python model/export_model.py
-```
-
-Outputs `resnet50.onnx` at the repo root (~98 MB). Verify integrity:
-
-```bash
 shasum -a 256 -c model/resnet50.onnx.sha256
 ```
 
-**Tensor contract** (must match `config.pbtxt` and the harness verbatim):
-- Input:  `input`, FP32, shape `[1, 3, 224, 224]`
-- Output: `output`, FP32, shape `[1, 1000]`
-
-We deliberately skipped a GCS bucket for the model. The export is deterministic from the script + hash, removing a redundant cloud-auth dependency for a one-time fixed artifact.
+**Tensor contract:** input `[1, 3, 224, 224]` FP32 → output `[1, 1000]` FP32.
 
 ---
 
-## [cloudrun/](cloudrun/) — Cloud Run deployment
+## [cloudrun/](cloudrun/) — Cloud Run (Shopnil Shahriar)
 
-Builds a Triton Inference Server container with ResNet-50 baked into the image, deploys to Cloud Run as the "container" configuration in the four-way comparison.
+Triton Inference Server in a Docker container deployed to Cloud Run.
 
 | File | Purpose |
 |---|---|
-| [cloudrun/Dockerfile](cloudrun/Dockerfile) | `FROM nvcr.io/nvidia/tritonserver:24.01-py3`, copies `model_repository/` to `/models`, exposes ports 8000 (HTTP) / 8001 (gRPC) / 8002 (metrics). |
-| [cloudrun/model_repository/resnet50/config.pbtxt](cloudrun/model_repository/resnet50/config.pbtxt) | Triton model config — declares input/output names, FP32 dtype, fixed shape, `KIND_AUTO` instance group. |
-| [cloudrun/model_repository/resnet50/1/model.onnx](cloudrun/model_repository/resnet50/1/) | The exported ResNet-50 ONNX, copied from the repo root after running `export_model.py`. Gitignored. |
-| [cloudrun/test_inference.py](cloudrun/test_inference.py) | Smoke test — sends one synthetic inference request to a deployed endpoint and prints top-5 predictions + latency. |
-| [cloudrun/.gcloudignore](cloudrun/.gcloudignore) | Controls what `gcloud builds` uploads. Explicitly allows `*.onnx` so the Dockerfile `COPY` step has the model in build context. |
-| [cloudrun/CLAUDE.md](cloudrun/CLAUDE.md) | Detailed deployment notes: GCP environment, required Cloud Run flags, pitfalls (autoscaling variance, CPU throttling, concurrency mismatch), build/deploy steps. |
-
-**Build and deploy (summary — see [cloudrun/CLAUDE.md](cloudrun/CLAUDE.md) for the full procedure):**
+| [cloudrun/Dockerfile](cloudrun/Dockerfile) | `FROM nvcr.io/nvidia/tritonserver:24.01-py3`, copies model repository, exposes ports 8000/8001/8002. |
+| [cloudrun/model_repository/resnet50/config.pbtxt](cloudrun/model_repository/resnet50/config.pbtxt) | Triton model config — FP32, `KIND_AUTO` instance group. |
+| [cloudrun/test_inference.py](cloudrun/test_inference.py) | Smoke test — one synthetic request, prints top-5 + latency. |
+| [cloudrun/CLAUDE.md](cloudrun/CLAUDE.md) | Full deployment notes and pitfalls. |
 
 ```bash
-# 1. Export model and stage it for the image
 python model/export_model.py
 cp resnet50.onnx cloudrun/model_repository/resnet50/1/model.onnx
-
-# 2. Build, push, deploy
-cd cloudrun
-docker build -t triton-resnet50:v1 .
-# tag + push to Artifact Registry: us-central1-docker.pkg.dev/ancient-acumen-486002-j4/benchmark-images/triton-resnet50:v1
-gcloud run deploy triton-resnet50 \
-  --image us-central1-docker.pkg.dev/ancient-acumen-486002-j4/benchmark-images/triton-resnet50:v1 \
-  --region us-central1 \
-  --port 8000 \
-  --cpu 4 --memory 8Gi \
-  --min-instances 1 --max-instances 1 \
-  --concurrency 100 \
-  --timeout 60 \
-  --no-cpu-throttling \
-  --allow-unauthenticated
+bash harness/run_all.sh <cloud-run-url> cloudrun
 ```
 
-**Smoke test the live endpoint:**
+---
+
+## [cloudfunction/](cloudfunction/) — Cloud Functions 2nd gen (Ethan Chang)
+
+onnxruntime-based inference adapter that speaks the Triton KServe v2 HTTP protocol, allowing the shared harness to target it without modification.
+
+| File | Purpose |
+|---|---|
+| [cloudfunction/main.py](cloudfunction/main.py) | HTTP adapter: loads ONNX model at cold start, routes Triton v2 requests to `onnxruntime`. |
+| [cloudfunction/deploy.sh](cloudfunction/deploy.sh) | Deploys as Cloud Functions 2nd gen (4 vCPU, 8 GiB, min-instances=1). |
+| [cloudfunction/test_inference.py](cloudfunction/test_inference.py) | Smoke test. |
+| [cloudfunction/CLAUDE.md](cloudfunction/CLAUDE.md) | Deployment notes, cold-start methodology, pitfalls. |
 
 ```bash
-python cloudrun/test_inference.py --endpoint https://triton-resnet50-xxxxx-uc.a.run.app
+python model/export_model.py
+cp resnet50.onnx cloudfunction/
+bash cloudfunction/deploy.sh
+bash harness/run_all.sh <function-url> cloudfunction
 ```
 
-**Why these flags matter** (full discussion in [cloudrun/CLAUDE.md](cloudrun/CLAUDE.md)):
-- `--min-instances=1 --max-instances=1` — disable autoscaling so cold-starting a second instance doesn't add 5–30s of latency variance.
-- `--concurrency=100` — Cloud Run's per-instance concurrency must be ≥ harness max concurrency, or requests queue at the frontend before reaching Triton.
-- `--no-cpu-throttling` — required for clean CPU utilization metrics; without it Cloud Run throttles CPU between requests.
+---
+
+## [confidential/](confidential/) — CPU VM + Confidential VM (Yang-Jung Chen)
+
+Paired deployment of standard and AMD SEV-encrypted VMs on identical hardware (`n2d-standard-4`) to isolate TEE overhead.
+
+| File | Purpose |
+|---|---|
+| [confidential/deploy_vm.sh](confidential/deploy_vm.sh) | Provisions both VMs. |
+| [confidential/setup_vm.sh](confidential/setup_vm.sh) | Installs Docker, pulls Triton image, starts the server. |
+| [confidential/README.md](confidential/README.md) | Full setup and benchmarking procedure. |
+
+Results show AMD SEV adds ~3 ms p50 overhead at C=10 (0.7%) and ~6% hourly cost — effectively free in performance terms for this workload.
+
+---
+
+## GPU VM (Aashir Khan)
+
+NVIDIA L4 GPU on a `g2-standard-4` Compute Engine instance running Triton Inference Server with the ONNX backend.
+
+**Deviations from protocol:**
+- NVIDIA L4 used instead of T4 — T4 was exhausted across all us-central1 zones and tested US regions at provisioning time
+- `g2-standard-4` instead of `n1-standard-4` — required machine type for L4
+- Harness ran on the VM (localhost:8000) — org policy blocks external IPs; this eliminates network latency from measurements
 
 ---
 
 ## [harness/](harness/) — Shared benchmarking harness
 
-The benchmarking program every teammate runs against their own deployment endpoint. Produces one CSV per `(config, concurrency, run)` combination — 20 CSVs per config (4 concurrency levels × 5 runs).
-
 | File | Purpose |
 |---|---|
-| [harness/harness.py](harness/harness.py) | Python program. Spawns N concurrent threads via `ThreadPoolExecutor`, each sending sequential inference requests through `tritonclient[http]`. Discards warmup requests, records per-request latency, writes a CSV with one row per request. |
-| [harness/run_all.sh](harness/run_all.sh) | Thin bash wrapper. Loops over `concurrency ∈ {1, 10, 50, 100}` × `run ∈ {1..5}` and invokes `harness.py` 20 times. Tracks failures and prints a re-run snippet for any that errored. |
-| [harness/requirements.txt](harness/requirements.txt) | Pinned dependencies: `tritonclient[http]==2.43.0`, `numpy`, `Pillow`. |
-
-**Setup:**
+| [harness/harness.py](harness/harness.py) | Spawns N concurrent threads via `ThreadPoolExecutor`, sends sequential inference requests via `tritonclient[http]`, records per-request latency to CSV. |
+| [harness/run_all.sh](harness/run_all.sh) | Loops over concurrency ∈ {1, 10, 50, 100} × run ∈ {1..5}, invokes harness.py 20 times. |
+| [harness/requirements.txt](harness/requirements.txt) | `tritonclient[http]==2.43.0`, `numpy`, `Pillow`. |
 
 ```bash
 pip install -r harness/requirements.txt
+bash harness/run_all.sh <endpoint-url> <config-name>
 ```
 
-**Single run:**
-
-```bash
-python harness/harness.py \
-  --endpoint https://triton-resnet50-xxxxx-uc.a.run.app \
-  --config-name cloudrun \
-  --concurrency 10 \
-  --run 1 \
-  --requests 200 \
-  --warmup 20 \
-  --output results/cloudrun/
-```
-
-**Full 20-run protocol:**
-
-```bash
-bash harness/run_all.sh https://triton-resnet50-xxxxx-uc.a.run.app cloudrun
-```
-
-**CLI contract** (same across all 5 configs — `gpu`, `cpu`, `confidential`, `cloudrun`, `cloudfunction`):
-
-| Flag | Default | Notes |
-|---|---|---|
-| `--endpoint` | (required) | `https://...` for Cloud Run, `http://IP:8000` for VMs. SSL inferred from scheme. |
-| `--config-name` | (required) | One of the 5 configs above; used in the output filename. |
-| `--concurrency` | (required) | One of `{1, 10, 50, 100}`. |
-| `--run` | (required) | Run number `1..5`. |
-| `--requests` | 200 | Per-client request count, including warmup. |
-| `--warmup` | 20 | First N per client are discarded from the CSV. |
-| `--output` | `results/` | Output directory for the CSV. |
-
-**CSV schema** (one row per measured request):
-
-```
-request_id, client_id, send_ts, receive_ts, latency_ms, success, error
-```
-
-The harness intentionally does **not** compute p50/p95/p99 or throughput inline — only raw per-request data. Aggregation across all teammates' CSVs happens in a separate phase at the end of the project.
+**CSV schema:** `request_id, client_id, send_ts, receive_ts, latency_ms, success, error`
 
 ---
 
 ## [results/](results/) — Raw benchmark data
 
-Per-config subdirectories with the 20 CSVs produced by `run_all.sh`. Naming:
-
 ```
 results/<config>/results_<config>_<concurrency>_<run>.csv
+confidential/results/<config>/results_<config>_<concurrency>_<run>.csv
 ```
 
-Currently committed: [results/cloudrun/](results/cloudrun/) — 5 runs of concurrency 1 (runs 2–5 of higher concurrency to follow).
+20 CSVs per config (4 concurrency levels × 5 runs), 180 measured rows per CSV (200 requests − 20 warmup). Aggregated p50/p95/p99 and throughput are in the dashboard; raw per-request data is the canonical record.
 
 ---
 
@@ -184,13 +180,8 @@ pip install -r harness/requirements.txt
 python model/export_model.py
 shasum -a 256 -c model/resnet50.onnx.sha256
 
-# 3. Deploy (Cloud Run example — see cloudrun/CLAUDE.md for full procedure)
-cp resnet50.onnx cloudrun/model_repository/resnet50/1/model.onnx
-# ... build, push, deploy ...
+# 3. Deploy your config (see per-config README/CLAUDE.md)
 
-# 4. Smoke test
-python cloudrun/test_inference.py --endpoint <your-endpoint>
-
-# 5. Run the full benchmark protocol
-bash harness/run_all.sh <your-endpoint> cloudrun
+# 4. Run the full benchmark protocol
+bash harness/run_all.sh <your-endpoint> <config-name>
 ```
